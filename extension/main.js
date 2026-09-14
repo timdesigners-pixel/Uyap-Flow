@@ -1,6 +1,6 @@
 /* ============================================================================
  *  Uyap Flow — Toplu Evrak İndirici — main.js
- *  https://avukat.uyap.gov.tr
+ *  https://avukat.uyap.gov.tr  |  https://vatandas.uyap.gov.tr
  * ============================================================================ */
 
 (function () {
@@ -36,6 +36,117 @@
   const STORAGE_TEMPL   = 'uyapBulk:filenameTemplate';
   const STORAGE_OPTS    = 'uyapBulk:opts';
   const DEFAULT_TEMPLATE = '{tarih}_{tur}_{aciklama}_{birim}';
+
+  /* ============================== PORTAL MODE ============================== */
+  // Avukat Portal ve Vatandaş Portal aynı content script'i paylaşır; DOM yapıları
+  // farklı olabileceğinden seçiciler bir fallback zinciri üzerinden çözülür.
+  const PORTAL_MODE = window.location.hostname.includes('vatandas') ? 'vatandas' : 'avukat';
+
+  // Avukat Portal seçicileri incelenerek doğrulanmıştır. Vatandaş Portal seçicileri
+  // tahmini adaylardır — canlı DOM üzerinde doğrulanana kadar fallback zinciri olarak kalır;
+  // window.__uyapFlowDebug.selectors hangi adayın eşleştiğini gösterir.
+  const SELECTORS = {
+    dosyaBaslik: {
+      avukat:   ['.dx-popup-title [title]'],
+      vatandas: ['.dx-popup-title [title]', '#dosyaBaslik', '.dosya-header [title]', '.dosya-header', '.case-title'],
+    },
+    evrakListItem: {
+      avukat:   ['.evrak-list--item'],
+      vatandas: ['.evrak-list--item', '.evrak-listesi tbody tr', '#evrakTable tbody tr', '.document-list tbody tr'],
+    },
+    downloadBtn: {
+      avukat:   ['button[aria-label="download"]'],
+      vatandas: ['button[aria-label="download"]', 'a[href*=".udf" i]', 'a[download]', '.udf-indir', 'a[onclick*="indir" i]'],
+    },
+    evrakTab: {
+      avukat:   [],
+      vatandas: ['a[href*="evrak" i]', '#evrakTab', '.tab-evrak', '[role="tab"][aria-controls*="evrak" i]'],
+    },
+    evrakContainer: {
+      avukat:   ['.evrak-treeview'],
+      vatandas: ['.evrak-treeview', '.evrak-listesi', '#evrakTable', '.document-list'],
+    },
+    dosyaGoruntuleBtn: {
+      avukat:   ['[id="dosya-goruntule"]', '[aria-label="Pencere Görünümü"]'],
+      vatandas: ['[id="dosya-goruntule"]', '[aria-label="Pencere Görünümü"]', 'a[onclick*="dosyaGoruntule" i]', '.btn-dosya-goruntule'],
+    },
+  };
+
+  window.__uyapFlowDebug = window.__uyapFlowDebug || {};
+  window.__uyapFlowDebug.portalMode = PORTAL_MODE;
+  window.__uyapFlowDebug.selectors = window.__uyapFlowDebug.selectors || {};
+
+  /** Bir seçici adı için aday listesini sırayla dener, ilk eşleşen tek elemanı döndürür. */
+  function resolveSelector(name, root) {
+    root = root || document;
+    const candidates = (SELECTORS[name] && SELECTORS[name][PORTAL_MODE]) || [];
+    for (const sel of candidates) {
+      let found = null;
+      try { found = root.querySelector(sel); } catch (_) { /* geçersiz seçici, sıradakine geç */ }
+      if (found) {
+        window.__uyapFlowDebug.selectors[name] = sel;
+        return { el: found, selector: sel };
+      }
+    }
+    return { el: null, selector: null };
+  }
+
+  /** Bir seçici adı için aday listesini sırayla dener, ilk eşleşme veren tüm elemanları döndürür. */
+  function resolveSelectorAll(name, root) {
+    root = root || document;
+    const candidates = (SELECTORS[name] && SELECTORS[name][PORTAL_MODE]) || [];
+    for (const sel of candidates) {
+      let found = null;
+      try { found = root.querySelectorAll(sel); } catch (_) { /* geçersiz seçici, sıradakine geç */ }
+      if (found && found.length) {
+        window.__uyapFlowDebug.selectors[name] = sel;
+        return { list: Array.from(found), selector: sel };
+      }
+    }
+    return { list: [], selector: null };
+  }
+
+  /** GG/AA/YYYY, GG.AA.YYYY veya GG-AA-YYYY formatlarını mevcut GG/AA/YYYY ayrıştırıcısıyla uyumlu hale getirir. */
+  function normalizeDateToSlash(str) {
+    if (!str) return str;
+    const s = String(str).trim();
+    const m = s.match(/^(\d{2})[.\-/](\d{2})[.\-/](\d{4})(.*)$/);
+    if (!m) return s;
+    return `${m[1]}/${m[2]}/${m[3]}${m[4] || ''}`;
+  }
+
+  const FIELD_KEYWORDS = [
+    ['Tür', /t(ü|u)r/i],
+    ['Açıklama', /a(ç|c)ıklama/i],
+    ['Onaylandığı Tarih', /onay/i],
+    ['Sisteme Gönderildiği Tarih', /g(ö|o)nderil/i],
+    ['Birim Evrak No', /birim.*evrak|evrak.*no/i],
+    ['Gönderen Yer Kişi', /g(ö|o)nderen/i],
+    ['Tip', /^tip$/i],
+  ];
+
+  /**
+   * Vatandaş Portal'da evrak metadata'sı `div[title]` blobu yerine tablo hücrelerinde
+   * olabilir. Satırın ait olduğu tablonun başlık satırından sütun adlarını çıkarıp
+   * anahtar kelime eşleşmesiyle meta alanlarına haritalar (best-effort fallback).
+   */
+  function extractMetaFromRowGeneric(row) {
+    const meta = {};
+    const table = row.closest('table');
+    if (!table) return meta;
+    const headerRow = table.querySelector('thead tr') || table.querySelector('tr');
+    if (!headerRow || headerRow === row) return meta;
+    const headers = Array.from(headerRow.querySelectorAll('th, td'));
+    const cells = Array.from(row.querySelectorAll('td'));
+    headers.forEach((h, i) => {
+      const label = (h.textContent || '').trim();
+      const cellText = (cells[i]?.textContent || '').trim();
+      if (!label || !cellText) return;
+      const hit = FIELD_KEYWORDS.find(([, re]) => re.test(label));
+      if (hit) meta[hit[0]] = cellText;
+    });
+    return meta;
+  }
 
   /* ============================== STYLES ============================== */
   const CSS = `
@@ -562,6 +673,40 @@
     margin-top: 10px; display: flex; gap: 6px; justify-content: flex-end;
   }
 
+  /* ====== UDF Önizleme ====== */
+  .uyap-bulk-udf-backdrop {
+    position: fixed; inset: 0; z-index: 2147483110;
+    background: rgba(15, 23, 42, 0.55); backdrop-filter: blur(6px);
+    display: flex; align-items: center; justify-content: center;
+    animation: uyap-bulk-fadein .15s ease;
+  }
+  .uyap-bulk-udf-modal {
+    width: 640px; max-width: calc(100vw - 40px);
+    max-height: calc(100vh - 80px);
+    background: ${C.bg}; border-radius: 16px;
+    box-shadow: 0 24px 64px -8px rgba(0,0,0,0.45);
+    display: flex; flex-direction: column; overflow: hidden;
+    animation: uyap-bulk-fadeup .2s ease;
+  }
+  .uyap-bulk-udf-modal header {
+    padding: 12px 16px; border-bottom: 1px solid ${C.border};
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .uyap-bulk-udf-modal header h4 { margin: 0; font-size: 14px; font-weight: 700; color: ${C.text}; }
+  .uyap-bulk-udf-modal .udf-body { padding: 12px 16px; overflow: auto; flex: 1; }
+  .uyap-bulk-udf-modal .udf-meta {
+    font-size: 11.5px; color: ${C.textSoft}; margin-bottom: 10px;
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  .uyap-bulk-udf-modal .udf-meta span {
+    background: ${C.panel}; border: 1px solid ${C.border}; border-radius: 999px; padding: 3px 9px;
+  }
+  .uyap-bulk-udf-modal pre {
+    white-space: pre-wrap; word-break: break-word; margin: 0;
+    font: 12.5px/1.6 ui-monospace, Consolas, monospace; color: ${C.text};
+    background: ${C.panel}; border: 1px solid ${C.border}; border-radius: 10px; padding: 12px;
+  }
+
   /* ====== Selection Toolbar (PTT sorgulama) ====== */
   .uyap-bulk-seltool {
     position: fixed; z-index: 2147483045;
@@ -671,15 +816,16 @@
 
   function getOpenDosyaInfo() {
     // Modal title: "2025/849 İstanbul Anadolu 37. Asliye Ceza Mahkemesi - Ceza Dava Dosyası"
-    const titleEl = document.querySelector('.dx-popup-title [title]');
+    const titleEl = resolveSelector('dosyaBaslik').el;
     const txt = (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
-    const m = txt.match(/^(\d{4})\/(\d+)\s+(.+?)\s+-\s+(.+)$/);
+    // Vatandaş Portal'da " - Dosya Türü" son eki olmayabilir; esnek regex.
+    const m = txt.match(/^(\d{4})\/(\d+)\s+(.+?)(?:\s+-\s+(.+))?$/);
     if (m) {
       return {
         yil: m[1], no: m[2],
         esas: `${m[1]}-${m[2]}`,
         mahkeme: sanitize(m[3]).slice(0, 80),
-        dosyaTuru: sanitize(m[4]).slice(0, 40),
+        dosyaTuru: sanitize(m[4] || '').slice(0, 40),
         raw: txt,
       };
     }
@@ -870,7 +1016,7 @@
       el('div', { style: 'min-width: 0; flex: 1;' },
         el('h3', {}, el('span', { class: 'brand' }, 'Uyap'), el('span', { class: 'brand-plus' }, ' Flow'),
           el('span', { class: 'brand-sub' }, ' — Toplu Evrak İndirici')),
-        el('span', { class: 'sub' }, 'v2.3.7 · Ctrl+K komut paleti')),
+        el('span', { class: 'sub' }, 'v2.4.0 · Ctrl+K komut paleti')),
       el('div', { class: 'uyap-bulk-header-actions' },
         UI.pinBtn,
         el('button', { class: 'uyap-bulk-close', title: 'Kapat (Esc)' }, '×')
@@ -1021,6 +1167,9 @@
         ),
         makeOpt('Tarayıcı bildirimi göster (işlem bittiğinde)', UI.useNotify),
         makeOpt('Tarayıcı başlığında ilerleme göster ([25/50])', UI.useTitleProg),
+        el('div', { class: 'uyap-bulk-divider' }),
+        el('div', { class: 'uyap-bulk-hint' }, 'Bilgisayarındaki bir .udf dosyasının içeriğini ve meta verisini görüntüle:'),
+        el('button', { class: 'uyap-bulk-btn ghost small', onclick: openUdfPreviewPicker }, '📄 UDF Önizle'),
       )
     );
 
@@ -1211,8 +1360,8 @@
       await expandAll();
     }
 
-    const rows = Array.from(document.querySelectorAll('.evrak-list--item'))
-      .filter((r) => r.querySelector('button[aria-label="download"]'));
+    const { list: rawRows } = resolveSelectorAll('evrakListItem');
+    const rows = rawRows.filter((r) => resolveSelector('downloadBtn', r).el);
 
     const seenKeys = new Set();
     let skippedDup = 0;
@@ -1222,7 +1371,10 @@
       const treeNode = row.closest('li.dx-treeview-node');
       const treeItem = treeNode?.querySelector('.dx-item.dx-treeview-item');
       const tdiv = row.querySelector('div[title]');
-      const meta = parseTitleAttr(tdiv?.getAttribute('title'));
+      let meta = tdiv ? parseTitleAttr(tdiv.getAttribute('title')) : {};
+      if (!Object.keys(meta).length) meta = extractMetaFromRowGeneric(row);
+      meta['Onaylandığı Tarih'] = normalizeDateToSlash(meta['Onaylandığı Tarih']);
+      meta['Sisteme Gönderildiği Tarih'] = normalizeDateToSlash(meta['Sisteme Gönderildiği Tarih']);
       const dedupKey = getEvrakScanDedupKey(meta);
       if (seenKeys.has(dedupKey)) {
         skippedDup++;
@@ -1608,7 +1760,7 @@
       if (cells.length < 2) return;
       const mahkeme = cells[0]?.textContent.trim() || '';
       const dosyaNo = cells[1]?.textContent.trim() || '';
-      const goruntuleBtn = row.querySelector('[id="dosya-goruntule"], [aria-label="Pencere Görünümü"]');
+      const goruntuleBtn = resolveSelector('dosyaGoruntuleBtn', row).el;
       if (!goruntuleBtn || !dosyaNo) return;
       const esas = dosyaNo.replace(/\//g, '-');
       if (state.queue.find((q) => q.esas === esas)) return;
@@ -1884,6 +2036,27 @@
     return true;
   }
 
+  /** UYAP sunucusu geçici olarak yanıt vermezse 3 deneme, exponential backoff ile. */
+  async function fetchWithRetry(url, opts, retries = 3, baseDelay = 500) {
+    let lastErr;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const r = await ORIG.fetch(url, opts);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < retries) await sleep(baseDelay * Math.pow(2, attempt));
+      }
+    }
+    throw lastErr;
+  }
+
+  /** PDF önizleme tetikleyicisi: DevExtreme ağacı yoksa (Vatandaş Portal) satırın kendisine tıklar. */
+  function getEvrakClickTarget(s) {
+    return s.treeItem || s.row;
+  }
+
   /* ============================== UDF MODE ============================== */
   async function runUdfMode(rows, delay) {
     const captured = [];
@@ -1914,8 +2087,17 @@
     const tasks = [];
     for (let i = 0; i < rows.length; i++) {
       const s = rows[i];
-      const btn = s.row.querySelector('button[aria-label="download"]');
+      const btn = resolveSelector('downloadBtn', s.row).el;
       if (!btn) { log(`#${i + 1} indir butonu yok, atlandı.`, 'warn'); continue; }
+
+      // Vatandaş Portal'da indir elemanı doğrudan <a href="...udf"> olabilir;
+      // bu durumda fetch/XHR yakalama beklemeye gerek yok, href doğrudan kullanılır.
+      if (btn.tagName === 'A' && btn.href) {
+        tasks.push({ url: btn.href, meta: s.meta, index: i + 1, folderSegments: s.folderSegments });
+        setProgress(((i + 1) / rows.length) * 30, `URL yakalanıyor [${i + 1}/${rows.length}]`);
+        continue;
+      }
+
       const before = captured.length;
       try { btn.scrollIntoView({ block: 'center' }); } catch (_) {}
       btn.click();
@@ -1942,8 +2124,7 @@
     for (let i = 0; i < tasks.length; i++) {
       const t = tasks[i];
       try {
-        const r = await ORIG.fetch(t.url, { credentials: 'include' });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const r = await fetchWithRetry(t.url, { credentials: 'include' });
         const cd = r.headers.get('content-disposition') || '';
         const m = cd.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
         const origName = m ? decodeURIComponent(m[1].replace(/['"]/g, '').trim()) : null;
@@ -2054,11 +2235,12 @@
 
     for (let i = 0; i < rows.length; i++) {
       const s = rows[i];
-      if (!s.treeItem) { log(`#${i + 1}: tree öğesi yok, atlandı.`, 'warn'); bad++; continue; }
+      const clickTarget = getEvrakClickTarget(s);
+      if (!clickTarget) { log(`#${i + 1}: tıklanacak öğe yok, atlandı.`, 'warn'); bad++; continue; }
 
       const before = capturedPdfs.length;
-      try { s.treeItem.scrollIntoView({ block: 'center' }); } catch (_) {}
-      s.treeItem.click();
+      try { clickTarget.scrollIntoView({ block: 'center' }); } catch (_) {}
+      clickTarget.click();
 
       const startWait = Date.now();
       while (Date.now() - startWait < 9000) {
@@ -2293,6 +2475,7 @@
         const barcode = prompt('Tebligat barkod numarasını gir:');
         if (barcode && barcode.trim()) openPttQuery(barcode.trim());
       } },
+      { id: 'udf-preview', icon: '📄', title: 'UDF Önizleme (Dosya Seç)', sub: 'Bilgisayarındaki bir .udf dosyasını içerik/meta olarak önizle', action: openUdfPreviewPicker },
     ];
 
     state.scanned.forEach((s, i) => {
@@ -2509,6 +2692,68 @@
     if (notePopEl) { notePopEl.remove(); notePopEl = null; }
   }
 
+  /* ============================== UDF ÖNİZLEME ============================== */
+  let udfPreviewBackdrop = null;
+
+  function closeUdfPreview() {
+    if (udfPreviewBackdrop) { udfPreviewBackdrop.remove(); udfPreviewBackdrop = null; }
+  }
+
+  function showUdfPreviewModal(filename, text, meta, errorMsg) {
+    closeUdfPreview();
+    const closeBtn = el('button', { class: 'uyap-bulk-close', title: 'Kapat (Esc)' }, '×');
+    const header = el('div', {},
+      el('h4', {}, '📄 UDF Önizleme — ' + sanitize(filename)),
+    );
+    const headerRow = el('header', {}, header, closeBtn);
+
+    const body = el('div', { class: 'udf-body' });
+    if (errorMsg) {
+      body.appendChild(el('div', { class: 'uyap-bulk-hint' }, '⚠ ' + errorMsg));
+    } else {
+      const metaRow = el('div', { class: 'udf-meta' },
+        el('span', {}, 'format_id: ' + (meta?.formatId || '—')),
+        el('span', {}, 'zip: ' + (meta?.zipEntries || []).join(', ')),
+      );
+      body.appendChild(metaRow);
+      body.appendChild(el('pre', {}, text || '(içerik boş)'));
+    }
+
+    const modal = el('div', { class: 'uyap-bulk-udf-modal' }, headerRow, body);
+    udfPreviewBackdrop = el('div', { class: 'uyap-bulk-udf-backdrop' }, modal);
+    udfPreviewBackdrop.addEventListener('mousedown', (e) => {
+      if (e.target === udfPreviewBackdrop) closeUdfPreview();
+    });
+    closeBtn.addEventListener('click', closeUdfPreview);
+    document.body.appendChild(udfPreviewBackdrop);
+  }
+
+  /** Kullanıcının seçtiği yerel .udf dosyasını JSZip ile okuyup içerik/meta önizler. */
+  function openUdfPreviewPicker() {
+    if (typeof UyapUdfReader === 'undefined') {
+      log('UDF Önizleme kullanılamıyor: lib/udf-reader.js yüklenmedi.', 'err');
+      return;
+    }
+    const input = el('input', { type: 'file', accept: '.udf', style: 'display:none' });
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (!file) return;
+      try {
+        const buf = await file.arrayBuffer();
+        const [text, meta] = await Promise.all([
+          UyapUdfReader.extractText(buf.slice(0)),
+          UyapUdfReader.extractMetadata(buf.slice(0)),
+        ]);
+        showUdfPreviewModal(file.name, text, meta, null);
+      } catch (e) {
+        showUdfPreviewModal(file.name, null, null, e?.message || String(e));
+      }
+    });
+    document.body.appendChild(input);
+    input.click();
+  }
+
   /* ============================== SELECTION TOOLBAR / PTT ============================== */
   /**
    * Bir metnin barkod olma ihtimalini kontrol eder.
@@ -2681,6 +2926,7 @@
 
       if (e.key === 'Escape') {
         if (paletteEl) { closePalette(); return; }
+        if (udfPreviewBackdrop) { closeUdfPreview(); return; }
         if (notePopEl) { closeNotePopup(); return; }
         if (UI.panel && !UI.panel.hidden && !state.pinned) {
           UI.panel.hidden = true;
@@ -2705,6 +2951,30 @@
     }, true);
   }
 
+  /* ============================== VATANDAS AJAX OBSERVER ============================== */
+  /**
+   * Vatandaş Portal'da "Evrak" sekmesi AJAX ile yüklenir; sayfa yüklendiğinde evrak
+   * konteyneri henüz DOM'da olmayabilir. Konteyner belirdiğinde/değiştiğinde paneli
+   * otomatik tazelemek için debounce'lı bir MutationObserver kurulur.
+   */
+  function setupVatandasEvrakObserver() {
+    if (PORTAL_MODE !== 'vatandas' || window.__uyapFlowObserver) return;
+    let debounceTimer = null;
+    let lastContainer = null;
+    const obs = new MutationObserver(() => {
+      const { el: container } = resolveSelector('evrakContainer');
+      if (!container || container === lastContainer) return;
+      lastContainer = container;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        log('Evrak listesi algılandı (AJAX yükleme), otomatik taranıyor…', 'info');
+        onScan();
+      }, 600);
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    window.__uyapFlowObserver = obs;
+  }
+
   /* ============================== INIT ============================== */
   function init() {
     try {
@@ -2713,6 +2983,7 @@
       buildUI();
       setupShortcuts();
       setupSelectionToolbar();
+      setupVatandasEvrakObserver();
     } catch (e) {
       console.error('[Uyap Flow] başlatma hatası:', e);
     }
