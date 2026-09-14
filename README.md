@@ -1,8 +1,10 @@
 # Uyap Flow — Toplu Evrak İndirici
 
-**Güncel sürüm: 2.3.7** · `extension/manifest.json` içindeki `version` alanı esas alınır.
+**Güncel sürüm: 2.4.0** · `extension/manifest.json` içindeki `version` alanı esas alınır.
 
-**Uyap Flow**, UYAP Avukat Portal’da bir dosyadaki evrakları **toplu** indirmenizi, filtrelemenizi ve düzenli klasörlere kaydetmenizi sağlayan bir tarayıcı eklentisidir. Chromium tabanlı tarayıcılar (Chrome, Edge, Brave, Opera) ile uyumludur.
+**Uyap Flow**, UYAP **Avukat Portal** ve **Vatandaş Portal**'da bir dosyadaki evrakları **toplu** indirmenizi, filtrelemenizi ve düzenli klasörlere kaydetmenizi sağlayan bir tarayıcı eklentisidir. Chromium tabanlı tarayıcılar (Chrome, Edge, Brave, Opera) ile uyumludur.
+
+> ⚠️ **Vatandaş Portal desteği deneyseldir.** Avukat Portal'daki tüm özellikler doğrulanmış ve stabildir. Vatandaş Portal (`vatandas.uyap.gov.tr`) desteği eklenmiştir ancak DOM seçicileri canlı ortamda henüz tam doğrulanmamıştır — bir sorunla karşılaşırsanız [README-VATANDAS.md](README-VATANDAS.md) dosyasındaki bilinen sınırlamalara bakın ve konsoldaki `window.__uyapFlowDebug.selectors` çıktısını bir issue'da paylaşın.
 
 > **Resmi ürün değildir** — UYAP ile bağlantılı veya onaylı bir kurum yazılımı değildir; portal arayüzüne eklenen yardımcı bir eklentidir.
 
@@ -161,13 +163,17 @@ extension/
 
 ## Güvenlik ve veri
 
-- **UYAP** script’i yalnızca `https://avukat.uyap.gov.tr/*`.
+- **UYAP** script’i `https://avukat.uyap.gov.tr/*` ve `https://vatandas.uyap.gov.tr/*` üzerinde çalışır.
 - **PTT yardımı** `https://gonderitakip.ptt.gov.tr/*` ve `https://*.ptt.gov.tr/*` (manifest ile uyumlu).
 - İndirme ve işlemler tarayıcıda; üçüncü taraf sunucuya özel veri gönderilmez.
 - **`localStorage`**: pin, FAB konumu, notlar, şablon, son indirme bilgisi (“sadece yeni”), komutla ilgili kalıcı tercihler olabilir.
 - Oturum çerezi tarayıcınızın normal UYAP oturumuyla aynıdır; eklenti şifre kaydetmez.
 
 ## Sürüm notları (özet)
+
+### v2.4.0
+- **Vatandaş Portal desteği (deneysel)** — `vatandas.uyap.gov.tr` için host_permissions/content_scripts eklendi; portal moduna göre DOM seçici fallback zinciri, tablo tabanlı meta çıkarma, AJAX MutationObserver. Avukat Portal davranışı değişmedi. Detaylar: [README-VATANDAS.md](README-VATANDAS.md).
+- **UDF Önizleme** — komut paletinden veya panelden bilgisayarınızdaki bir `.udf` dosyasının içeriğini/meta verisini tarayıcıda görüntüleme.
 
 ### v2.3.7
 - Marka adı **Uyap Flow** (manifest, panel, bildirim, PDF üretici, PTT rozet, README).
