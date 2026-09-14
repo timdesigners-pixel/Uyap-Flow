@@ -4,7 +4,7 @@
 
 **Uyap Flow**, UYAP **Avukat Portal** ve **Vatandaş Portal**'da bir dosyadaki evrakları **toplu** indirmenizi, filtrelemenizi ve düzenli klasörlere kaydetmenizi sağlayan bir tarayıcı eklentisidir. Chromium tabanlı tarayıcılar (Chrome, Edge, Brave, Opera) ile uyumludur.
 
-> ⚠️ **Vatandaş Portal desteği deneyseldir.** Avukat Portal'daki tüm özellikler doğrulanmış ve stabildir. Vatandaş Portal (`vatandas.uyap.gov.tr`) desteği eklenmiştir ancak DOM seçicileri canlı ortamda henüz tam doğrulanmamıştır — bir sorunla karşılaşırsanız [README-VATANDAS.md](README-VATANDAS.md) dosyasındaki bilinen sınırlamalara bakın ve konsoldaki `window.__uyapFlowDebug.selectors` çıktısını bir issue'da paylaşın.
+> ⚠️ **Vatandaş Portal desteği yeni eklendi.** Avukat Portal'daki tüm özellikler doğrulanmış ve stabildir. Vatandaş Portal (`vatandas.uyap.gov.tr`) desteği canlı bir oturumda test edildi — evrak tarama ve **UDF indirme uçtan uca doğrulandı**. PDF modu ve çoklu dosya kuyruğu henüz canlı test edilmedi. Detaylar ve bilinen sınırlamalar için [README-VATANDAS.md](README-VATANDAS.md) dosyasına bakın.
 
 > **Resmi ürün değildir** — UYAP ile bağlantılı veya onaylı bir kurum yazılımı değildir; portal arayüzüne eklenen yardımcı bir eklentidir.
 

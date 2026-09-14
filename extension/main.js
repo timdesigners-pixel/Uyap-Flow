@@ -45,14 +45,17 @@
   // Avukat Portal seçicileri incelenerek doğrulanmıştır. Vatandaş Portal seçicileri
   // tahmini adaylardır — canlı DOM üzerinde doğrulanana kadar fallback zinciri olarak kalır;
   // window.__uyapFlowDebug.selectors hangi adayın eşleştiğini gösterir.
+  // Vatandaş Portal degerleri 2026-09-15'te canli oturumda (giris yapilmis, gercek
+  // dosya/evrak ekrani) dogrulanmistir — tahmini degildir. Eski tahmini adaylar,
+  // farkli UYAP surumleri icin fallback olarak listede tutulur.
   const SELECTORS = {
     dosyaBaslik: {
       avukat:   ['.dx-popup-title [title]'],
-      vatandas: ['.dx-popup-title [title]', '#dosyaBaslik', '.dosya-header [title]', '.dosya-header', '.case-title'],
+      vatandas: ['#dosya_goruntule_modal .modal-title', '.modal.in .modal-title', '#dosyaBaslik', '.dosya-header [title]', '.dosya-header', '.case-title'],
     },
     evrakListItem: {
       avukat:   ['.evrak-list--item'],
-      vatandas: ['.evrak-list--item', '.evrak-listesi tbody tr', '#evrakTable tbody tr', '.document-list tbody tr'],
+      vatandas: ['#dosya_evrak_bilgileri_tab span.file[evrak_id]', '.evrak-list--item', '.evrak-listesi tbody tr', '#evrakTable tbody tr', '.document-list tbody tr'],
     },
     downloadBtn: {
       avukat:   ['button[aria-label="download"]'],
@@ -60,11 +63,11 @@
     },
     evrakTab: {
       avukat:   [],
-      vatandas: ['a[href*="evrak" i]', '#evrakTab', '.tab-evrak', '[role="tab"][aria-controls*="evrak" i]'],
+      vatandas: ['a[href="#dosya_evrak_bilgileri_tab"]', 'a[href*="evrak" i]', '#evrakTab', '.tab-evrak', '[role="tab"][aria-controls*="evrak" i]'],
     },
     evrakContainer: {
       avukat:   ['.evrak-treeview'],
-      vatandas: ['.evrak-treeview', '.evrak-listesi', '#evrakTable', '.document-list'],
+      vatandas: ['#dosya_evrak_bilgileri_tab .filetree', '.evrak-treeview', '.evrak-listesi', '#evrakTable', '.document-list'],
     },
     dosyaGoruntuleBtn: {
       avukat:   ['[id="dosya-goruntule"]', '[aria-label="Pencere Görünümü"]'],
@@ -125,10 +128,93 @@
     ['Tip', /^tip$/i],
   ];
 
+  // Vatandaş Portal'da evrak alan adları avukat portalından bazen farklı yazılır
+  // (canlı test ile doğrulandı, 2026-09-15). Mevcut kod tabanı 'Tür', 'Tip',
+  // 'Onaylandığı Tarih', 'Gönderen Yer Kişi' anahtarlarına bağlı olduğundan buraya haritalanır.
+  const VATANDAS_FIELD_ALIASES = {
+    'Türü': 'Tür',
+    'Tipi': 'Tip',
+    'Evrakın Onaylandığı Tarih': 'Onaylandığı Tarih',
+    'Gönderen Yer/Kişi': 'Gönderen Yer Kişi',
+  };
+
+  function normalizeVatandasMeta(raw) {
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) out[VATANDAS_FIELD_ALIASES[k] || k] = v;
+    return out;
+  }
+
+  /**
+   * Vatandaş Portal'da evrak metadata'sı bir Bootstrap tooltip'in
+   * data-original-title özniteliğinde HTML olarak durur:
+   * `<div>Birim Evrak No: 64817</div><div>Evrakın Onaylandığı Tarih : 08/04/2026</div>...`
+   * (canlı DOM'da doğrulandı — 2026-09-15).
+   */
+  function extractMetaFromVatandasTooltip(el) {
+    const html = el?.getAttribute('data-original-title') || el?.getAttribute('title') || '';
+    if (!html) return {};
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    const meta = {};
+    Array.from(tmp.children).forEach((divEl) => {
+      const line = (divEl.textContent || '').trim();
+      const m = line.match(/^([^:]+?)\s*:\s*(.*)$/);
+      if (m) meta[m[1].trim()] = m[2].trim();
+    });
+    return meta;
+  }
+
+  /**
+   * Vatandaş Portal evrak ağacı jQuery "filetree" eklentisi ile oluşturulur:
+   * `<li class="expandable|collapsable"><span class="folder">AD</span><ul>...</ul></li>`
+   * iç içe yapısı (canlı DOM'da doğrulandı — 2026-09-15). Avukat portalın
+   * DevExtreme ağacından tamamen farklı olduğundan ayrı bir yürüyücü gerekir.
+   */
+  function getVatandasFolderSegments(leafEl) {
+    const segments = [];
+    let li = leafEl?.closest('li');
+    let ul = li ? li.parentElement : null;
+    while (ul && ul.tagName === 'UL') {
+      const parentLi = ul.parentElement;
+      if (!parentLi || parentLi.tagName !== 'LI') break;
+      const folderSpan = parentLi.querySelector(':scope > span.folder');
+      const label = folderSpan ? folderSpan.textContent.trim() : '';
+      if (label) segments.unshift(sanitizePathSegment(label));
+      ul = parentLi.parentElement;
+    }
+    return segments;
+  }
+
+  /**
+   * Vatandaş Portal'da evrak indirmesi fetch/XHR ÜZERİNDEN GİTMEZ: sayfanın kendi
+   * downloadDocURL(url, values) fonksiyonu bir <a> elemanı oluşturup sentetik click
+   * dispatch eder (gerçek tarayıcı indirmesi). Bu yüzden fetch/XHR yakalama işe
+   * yaramaz; bunun yerine downloadDocURL geçici olarak yamanıp değerleri (url,
+   * values) yakalanır — gerçek indirme hiç tetiklenmeden URL elde edilir.
+   * (Canlı oturumda 2026-09-15'te doğrulandı: aynı endpoint download_document_brd.uyap
+   * avukat portalıyla birebir aynı.)
+   */
+  function patchVatandasDownloadUrl(onCapture) {
+    if (typeof window.downloadDocURL !== 'function') return null;
+    const orig = window.downloadDocURL;
+    window.downloadDocURL = function (url, values) {
+      try {
+        const qs = (window.Application && window.Application.convertObjectToURLParameters)
+          ? window.Application.convertObjectToURLParameters(values)
+          : '';
+        onCapture(qs ? `${url}?${qs}` : url);
+      } catch (_) {
+        onCapture(url);
+      }
+    };
+    return () => { window.downloadDocURL = orig; };
+  }
+
   /**
    * Vatandaş Portal'da evrak metadata'sı `div[title]` blobu yerine tablo hücrelerinde
    * olabilir. Satırın ait olduğu tablonun başlık satırından sütun adlarını çıkarıp
-   * anahtar kelime eşleşmesiyle meta alanlarına haritalar (best-effort fallback).
+   * anahtar kelime eşleşmesiyle meta alanlarına haritalar (best-effort fallback,
+   * gerçek yapı bilinmeyen olası bir tablo tabanlı varyant için).
    */
   function extractMetaFromRowGeneric(row) {
     const meta = {};
@@ -818,8 +904,10 @@
     // Modal title: "2025/849 İstanbul Anadolu 37. Asliye Ceza Mahkemesi - Ceza Dava Dosyası"
     const titleEl = resolveSelector('dosyaBaslik').el;
     const txt = (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
-    // Vatandaş Portal'da " - Dosya Türü" son eki olmayabilir; esnek regex.
-    const m = txt.match(/^(\d{4})\/(\d+)\s+(.+?)(?:\s+-\s+(.+))?$/);
+    // Avukat: "2025/849 İstanbul Anadolu 37. Asliye Ceza Mahkemesi - Ceza Dava Dosyası"
+    // Vatandaş: "2026/94 - Karşıyaka 1. Ağır Ceza Mahkemesi - Ceza Dava Dosyası" (dava no
+    // sonrası ekstra " - " var — canlı DOM'da doğrulandı, 2026-09-15). İkisini de kapsar.
+    const m = txt.match(/^(\d{4})\/(\d+)\s*-?\s*(.+?)(?:\s+-\s+(.+))?$/);
     if (m) {
       return {
         yil: m[1], no: m[2],
@@ -1361,18 +1449,25 @@
     }
 
     const { list: rawRows } = resolveSelectorAll('evrakListItem');
-    const rows = rawRows.filter((r) => resolveSelector('downloadBtn', r).el);
+    const rows = rawRows.filter((r) => r.hasAttribute('evrak_id') || resolveSelector('downloadBtn', r).el);
 
     const seenKeys = new Set();
     let skippedDup = 0;
     state.scanned = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
+      const isVatandasLeaf = row.hasAttribute('evrak_id');
       const treeNode = row.closest('li.dx-treeview-node');
       const treeItem = treeNode?.querySelector('.dx-item.dx-treeview-item');
       const tdiv = row.querySelector('div[title]');
-      let meta = tdiv ? parseTitleAttr(tdiv.getAttribute('title')) : {};
-      if (!Object.keys(meta).length) meta = extractMetaFromRowGeneric(row);
+      let meta;
+      if (tdiv) {
+        meta = parseTitleAttr(tdiv.getAttribute('title'));
+      } else if (isVatandasLeaf) {
+        meta = normalizeVatandasMeta(extractMetaFromVatandasTooltip(row));
+      } else {
+        meta = extractMetaFromRowGeneric(row);
+      }
       meta['Onaylandığı Tarih'] = normalizeDateToSlash(meta['Onaylandığı Tarih']);
       meta['Sisteme Gönderildiği Tarih'] = normalizeDateToSlash(meta['Sisteme Gönderildiği Tarih']);
       const dedupKey = getEvrakScanDedupKey(meta);
@@ -1381,11 +1476,11 @@
         continue;
       }
       seenKeys.add(dedupKey);
-      const aria = treeNode?.getAttribute('aria-label') || `#${state.scanned.length + 1}`;
+      const aria = treeNode?.getAttribute('aria-label') || row.getAttribute('data-sid') || `#${state.scanned.length + 1}`;
       const dateStr = meta['Onaylandığı Tarih'] || meta['Sisteme Gönderildiği Tarih'];
       const date = parseDateDDMMYYYY(dateStr);
       const type = (meta['Tür'] || '').trim();
-      const folderSegments = getEvrakTreeFolderSegments(treeNode);
+      const folderSegments = isVatandasLeaf ? getVatandasFolderSegments(row) : getEvrakTreeFolderSegments(treeNode);
       state.scanned.push({
         row, treeNode, treeItem, meta, aria, date, type, folderSegments,
         index: state.scanned.length,
@@ -2083,15 +2178,36 @@
       return ORIG.xhrSend.apply(this, arguments);
     };
 
+    // Vatandaş Portal: indirme fetch/XHR üzerinden gitmez (sentetik <a> click ile
+    // gerçek tarayıcı indirmesi tetiklenir). downloadDocURL() geçici olarak yamanıp
+    // gerçek indirme hiç tetiklenmeden (url, values) yakalanır. Canlı doğrulandı.
+    const restoreVatandasHook = PORTAL_MODE === 'vatandas'
+      ? patchVatandasDownloadUrl((fullUrl) => { if (captureMode) captured.push(fullUrl); })
+      : null;
+
     log('URL\'ler yakalanıyor…');
     const tasks = [];
     for (let i = 0; i < rows.length; i++) {
       const s = rows[i];
+
+      if (PORTAL_MODE === 'vatandas' && s.row.hasAttribute('evrak_id') && restoreVatandasHook) {
+        const before = captured.length;
+        try { s.row.scrollIntoView({ block: 'center' }); } catch (_) {}
+        s.row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+        if (captured.length > before) {
+          tasks.push({ url: captured[captured.length - 1], meta: s.meta, index: i + 1, folderSegments: s.folderSegments });
+        } else {
+          log(`#${i + 1} URL yakalanamadı (Vatandaş Portal).`, 'warn');
+        }
+        setProgress(((i + 1) / rows.length) * 30, `URL yakalanıyor [${i + 1}/${rows.length}]`);
+        continue;
+      }
+
       const btn = resolveSelector('downloadBtn', s.row).el;
       if (!btn) { log(`#${i + 1} indir butonu yok, atlandı.`, 'warn'); continue; }
 
-      // Vatandaş Portal'da indir elemanı doğrudan <a href="...udf"> olabilir;
-      // bu durumda fetch/XHR yakalama beklemeye gerek yok, href doğrudan kullanılır.
+      // Vatandaş Portal'da (yukarıdaki dal eşleşmezse) indir elemanı doğrudan
+      // <a href="...udf"> olabilir; fetch/XHR yakalamaya gerek kalmadan href kullanılır.
       if (btn.tagName === 'A' && btn.href) {
         tasks.push({ url: btn.href, meta: s.meta, index: i + 1, folderSegments: s.folderSegments });
         setProgress(((i + 1) / rows.length) * 30, `URL yakalanıyor [${i + 1}/${rows.length}]`);
@@ -2115,6 +2231,7 @@
     }
 
     captureMode = false;
+    if (restoreVatandasHook) restoreVatandasHook();
 
     log(`${tasks.length} dosya indiriliyor…`, 'info');
     const zipMode = UI.useZip.checked;
