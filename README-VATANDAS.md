@@ -4,11 +4,10 @@ Bu dal (`feature/vatandas-portal`), Uyap Flow eklentisini **UYAP Avukat Portal**
 **UYAP Vatandaş Portal** (`vatandas.uyap.gov.tr`) üzerinde de çalışacak şekilde genişletir.
 
 > **Durum: canlı doğrulandı (2026-09-15).** Kullanıcı kendi hesabıyla giriş yaptı (kimlik
-> bilgilerini otomasyon aracı görmedi/girmedi), gerçek bir dava dosyasının Evrak sekmesi
-> üzerinde DOM incelendi ve temel tarama + indirme akışı uçtan uca test edildi: 64 evrak
-> bulundu, meta veriler doğru çıkarıldı, klasör yolu doğru oluşturuldu, gerçek bir evrak
-> indirilip doğru dosya adıyla kaydedildi. Aşağıdaki seçiciler artık **tahmini değil,
-> doğrulanmıştır**.
+> bilgilerini otomasyon aracı görmedi/girmedi). Gerçek paketlenmiş eklenti (v2.4.0) yüklenip
+> gerçek bir dava dosyasında test edildi: **UDF modu 34/34 evrakta başarılı, 0 hata**
+> (kullanıcının kendi log dosyasıyla doğrulandı). PDF modu ilk testte başarısız çıktı — sebebi
+> bulunup düzeltildi (bkz. "UDF → PDF dönüşümü" bölümü), ikinci canlı test bekleniyor.
 
 ## Neler değişti
 
@@ -46,8 +45,12 @@ Bu dal (`feature/vatandas-portal`), Uyap Flow eklentisini **UYAP Avukat Portal**
 - **Tarih normalizasyonu**: `GG.AA.YYYY` / `GG-AA-YYYY` formatları mevcut `GG/AA/YYYY`
   ayrıştırıcısıyla uyumlu hale getirilir.
 - **Yeniden deneme**: UDF indirmede geçici ağ hatalarına karşı 3 deneme + exponential backoff.
-- **PDF modu**: DevExtreme ağaç öğesi (`treeItem`) yoksa satırın kendisine tıklanır — bu yol
-  henüz canlı doğrulanmadı (bkz. Bilinen Sınırlamalar).
+- **PDF modu (Vatandaş Portal)**: İlk canlı testte başarısız çıktı — sebebi bulundu: avukat
+  portalının aksine tek tıklama bir önizleme değil, **bağlam menüsü** (`cmenu.show`) açıyor,
+  hiçbir ağ isteği tetiklemiyor. Bu yüzden Vatandaş Portal'da "PDF modu" artık farklı çalışır:
+  UDF modunun kanıtlanmış indirme akışı kullanılır, dönen dosya `.udf` ise **tarayıcıda gerçek
+  bir PDF'e render edilir** (bkz. "UDF → PDF dönüşümü"); zaten `.pdf`/`.tif` ise olduğu gibi kaydedilir.
+  Avukat portalının kendi PDF modu (önizleme + ağ yakalama) değişmedi.
 - **MutationObserver** (`window.__uyapFlowObserver`): Vatandaş Portal'da evrak konteyneri
   belirince/değişince otomatik tarama tetiklenir (debounce 600ms).
 - **UDF Önizleme**: Komut paletinde (`Ctrl+K` → "UDF Önizleme") ve "Gelişmiş" panelinde yeni bir
@@ -56,6 +59,25 @@ Bu dal (`feature/vatandas-portal`), Uyap Flow eklentisini **UYAP Avukat Portal**
 ### `extension/lib/udf-reader.js` (yeni dosya)
 UDF-Toolkit'teki Python `udf_reader.py` modülünün JSZip tabanlı JavaScript portu.
 `window.UyapUdfReader.{readUdf, extractText, extractMetadata, validateUdf}` sağlar.
+
+### `extension/lib/udf-to-pdf.js` (yeni dosya) — UDF → PDF dönüşümü
+Python `udf_to_pdf.py`'nin basitleştirilmiş bir JS portu: `pdf-lib` + `fontkit` ile UDF içeriğini
+(paragraf, kalın/italik, hizalama, tablo, gömülü JPEG/PNG resim, sayfa sonu) gerçek bir PDF'e
+render eder. Türkçe karakterler için `DejaVuSerif` fontu (4 ağırlık) `lib/fonts/` altında
+vendor edildi ve `web_accessible_resources` ile `chrome.runtime.getURL()` üzerinden tembel
+(lazy) yüklenir — sadece PDF dönüşümü ilk kullanıldığında indirilir, sayfa açılışını etkilemez.
+
+**Node'da (jsdom + gerçek pdf-lib/fontkit) doğrulandı**: kalın/italik/Türkçe karakterler
+(ığüşöç ĞÜŞÖÇİı dahil), 2 sütunlu tablo ve gömülü PNG resim doğru render edildi (görsel olarak
+piksel bazında incelendi — ekran görüntüsü PR'da mevcut). **Canlı Vatandaş Portal'da henüz test
+edilmedi** — kullanıcının bir sonraki testi bekleniyor.
+
+**v1 basitleştirmeleri (bilinçli sınırlamalar):**
+- Üstbilgi/altbilgi her sayfada tekrar etmez, sadece ilk/son sayfada bir kez basılır.
+- Numaralı/madde işaretli listeler düz paragraf olarak basılır.
+- Metin çıkarma/kopyalama (ToUnicode CMap) tam çalışmayabilir — **görsel render tamamen
+  doğru**, sadece PDF içinden metni seçip kopyalamak güvenilir olmayabilir.
+- `.tif` gibi UDF olmayan native formatlar dönüştürülmez, olduğu gibi kaydedilir.
 
 ## Avukat Portal'da davranış değişikliği var mı?
 
@@ -67,9 +89,11 @@ korunur. Tüm değişiklikler `node --check` ile sözdizimi doğrulamasından ge
 
 1. **Toplu dosya kuyruğu (çoklu dosya)** henüz canlı test edilmedi — "Dosya Sorgula" tablosundaki
    `dosya-goruntule` seçicisi doğru görünüyor ama kuyruk akışının tamamı denenmedi.
-2. **PDF modu** Vatandaş Portal'da canlı doğrulanmadı — tek evrak önizlemesinin hangi ağ isteğini
-   tetiklediği ve `%PDF-` sniffer'ının onu yakalayıp yakalamadığı test edilmedi. **UDF modu**
-   (varsayılan) tam doğrulandı ve önerilir.
+2. **PDF modu (yeni UDF→PDF yolu)** Node'da (jsdom) doğrulandı ama Vatandaş Portal'da canlı
+   test edilmedi — `chrome.runtime.getURL()`'nin gerçek uzantıda MAIN world content script'ten
+   beklendiği gibi çalışıp çalışmadığı doğrulanmalı. Çalışmazsa kod net bir uyarı loglayıp ham
+   `.udf` dosyasını kaydeder (kırılmaz, sadece dönüşüm atlanır). **UDF modu** (varsayılan) tam
+   canlı doğrulandı ve her koşulda önerilir.
 3. **PTT tebligat sorgulama** (`ptt-helper.js`) portal bağımsızdır, değişmedi.
 4. **UDF Toolkit entegrasyonu** (`lib/udf-reader.js`) sadece **içerik önizleme** sağlar;
    imza doğrulama (`sign.sgn`) veya belge düzenleme yapmaz.
@@ -94,9 +118,13 @@ korunur. Tüm değişiklikler `node --check` ile sözdizimi doğrulamasından ge
   - **Uçtan uca indirme**: bir evrak yakalanıp gerçek bir dosya (PDF, 5674 byte) indi, dosya adı
     doğru üretildi (`07-04-2026_Kapalı E-Tebliğ Mazbatası_10804.pdf`)
   - Dosya başlığı ayrıştırma (`getOpenDosyaInfo`) doğru sonuç verdi
-  - **Not**: Gerçek paketlenmiş eklenti `chrome://extensions` üzerinden yüklenip test edilmedi
-    (kullanılan tarayıcı aracı bunu desteklemiyor) — enjekte edilen kod main.js'teki fonksiyonların
-    birebir kopyasıydı, ama son adım olarak gerçek eklentiyi kurup denemeniz önerilir.
+- ✅ **Gerçek paketlenmiş eklenti (v2.4.0) kullanıcı tarafından yüklenip test edildi**: UDF modu
+  34/34 evrakta başarılı (log dosyasıyla doğrulandı). PDF modu ilk denemede tüm evraklarda
+  "PDF yakalanamadı" hatası verdi — kök neden bulunup düzeltildi (yukarıya bakın); düzeltmenin
+  canlı testi bekleniyor.
+- ✅ **UDF → PDF render motoru** Node'da (jsdom + gerçek `pdf-lib`/`@pdf-lib/fontkit`) 3 senaryoyla
+  test edildi: düz metin, kalın+italik+Türkçe karakterli paragraf + 2 sütunlu tablo, gömülü PNG
+  resim. Üretilen PDF'ler `pymupdf` ile piksel görüntüye render edilip gözle doğrulandı.
 
 ## UDF Toolkit (ayrı repo: `UDF-Toolkit`)
 

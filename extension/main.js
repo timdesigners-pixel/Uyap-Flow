@@ -1940,12 +1940,20 @@
     if (UI.useMergePdf.checked && format !== 'pdf') {
       log('UYARI: "Tek birleşik PDF" sadece PDF modunda çalışır. Yok sayılıyor.', 'warn');
     }
+    if (UI.useMergePdf.checked && format === 'pdf' && PORTAL_MODE === 'vatandas') {
+      log('UYARI: Vatandaş Portal\'da "Tek birleşik PDF" henüz desteklenmiyor. Yok sayılıyor.', 'warn');
+    }
 
     log(`İndirme başlıyor: ${rows.length} evrak, format=${format.toUpperCase()}, ${delay}ms bekleme.`, 'info');
 
     let result;
     try {
-      if (format === 'pdf') {
+      if (format === 'pdf' && PORTAL_MODE === 'vatandas') {
+        // Vatandaş Portal'da tek-tık önizleme mekanizması yok (bkz. runUdfMode notu);
+        // bunun yerine UDF modunun kanıtlanmış indirme akışı kullanılıp .udf çıkan
+        // dosyalar tarayıcıda gerçek PDF'e render edilir (lib/udf-to-pdf.js).
+        result = await runUdfMode(rows, delay, { convertUdfToPdf: true });
+      } else if (format === 'pdf') {
         result = await runPdfMode(rows, delay);
       } else {
         result = await runUdfMode(rows, delay);
@@ -2153,7 +2161,8 @@
   }
 
   /* ============================== UDF MODE ============================== */
-  async function runUdfMode(rows, delay) {
+  async function runUdfMode(rows, delay, opts) {
+    opts = opts || {};
     const captured = [];
     let captureMode = true;
 
@@ -2250,8 +2259,22 @@
           const mExt = origName.match(/\.([a-z0-9]{1,5})$/i);
           if (mExt) ext = '.' + mExt[1].toLowerCase();
         }
+        let blob = await r.blob();
+
+        // Vatandaş Portal'da "PDF modu" seçildiğinde: gerçek dosya .udf ise tarayıcıda
+        // gerçek bir PDF'e render edilir (lib/udf-to-pdf.js). Zaten .pdf/.tif vb. ise
+        // dokunulmadan olduğu gibi kaydedilir (TIFF için tarayıcı içi PDF dönüşümü henüz yok).
+        if (opts.convertUdfToPdf && ext === '.udf' && typeof UyapUdfToPdf !== 'undefined') {
+          try {
+            const pdfBlob = await UyapUdfToPdf.convert(await blob.arrayBuffer());
+            blob = pdfBlob;
+            ext = '.pdf';
+          } catch (e) {
+            log(`#${t.index} UDF→PDF dönüştürülemedi, ham .udf kaydediliyor: ${e?.message || e}`, 'warn');
+          }
+        }
+
         const filename = getFilenameWithFolder(t.meta, t.index, ext, t.folderSegments);
-        const blob = await r.blob();
 
         if (zipMode) {
           zipItems.push({ filename, blob });

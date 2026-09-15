@@ -16,7 +16,7 @@
   "content_scripts": [
     {
       "matches": ["https://avukat.uyap.gov.tr/*", "https://vatandas.uyap.gov.tr/*"],
-      "js": ["lib/jszip.min.js", "lib/pdf-lib.min.js", "lib/udf-reader.js", "main.js"],
+      "js": ["lib/jszip.min.js", "lib/pdf-lib.min.js", "lib/fontkit.min.js", "lib/udf-reader.js", "lib/udf-to-pdf.js", "main.js"],
       "run_at": "document_idle",
       "world": "MAIN",
       "all_frames": false
@@ -30,6 +30,12 @@
       "run_at": "document_idle",
       "world": "MAIN",
       "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/fonts/*.ttf"],
+      "matches": ["https://avukat.uyap.gov.tr/*", "https://vatandas.uyap.gov.tr/*"]
     }
   ]
 }
