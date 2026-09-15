@@ -16,26 +16,34 @@
 (function (global) {
   'use strict';
 
-  const FONT_FILES = {
-    regular: 'lib/fonts/DejaVuSerif.ttf',
-    bold: 'lib/fonts/DejaVuSerif-Bold.ttf',
-    italic: 'lib/fonts/DejaVuSerif-Italic.ttf',
-    boldItalic: 'lib/fonts/DejaVuSerif-BoldItalic.ttf',
-  };
-
-  function resourceURL(path) {
-    try {
-      if (global.chrome?.runtime?.getURL) return global.chrome.runtime.getURL(path);
-    } catch (_) { /* MAIN world'de chrome.runtime her zaman erişilebilir olmayabilir */ }
-    return null;
-  }
-
-  async function fetchFontBytes(key) {
-    const url = resourceURL(FONT_FILES[key]);
-    if (!url) throw new Error('chrome.runtime.getURL kullanılamıyor — font yüklenemedi.');
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`Font indirilemedi (${key}): HTTP ${resp.status}`);
-    return new Uint8Array(await resp.arrayBuffer());
+  /**
+   * main.js/udf-to-pdf.js MAIN dünyada çalışır; chrome.runtime orada tanımlı
+   * DEĞİLDİR (Chrome kısıtlaması — MAIN world sayfanın kendi JS ortamıdır).
+   * Font dosyalarını okuyabilmek için lib/udf-font-bridge.js (ISOLATED world,
+   * chrome.runtime'a erişebilir) ile window.postMessage üzerinden konuşulur.
+   */
+  function requestFontBytes(name) {
+    return new Promise((resolve, reject) => {
+      const requestId = 'uyapFlowFont_' + Math.random().toString(36).slice(2);
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error('Font köprüsü zaman aşımına uğradı (lib/udf-font-bridge.js yüklenmemiş olabilir).'));
+      }, 8000);
+      function onMessage(event) {
+        if (event.source !== global.window) return;
+        const data = event.data;
+        if (!data || data.type !== 'UYAP_FLOW_FONT_RESPONSE' || data.requestId !== requestId) return;
+        cleanup();
+        if (data.error) reject(new Error(data.error));
+        else resolve(new Uint8Array(data.bytes));
+      }
+      function cleanup() {
+        clearTimeout(timeoutId);
+        global.window.removeEventListener('message', onMessage);
+      }
+      global.window.addEventListener('message', onMessage);
+      global.window.postMessage({ type: 'UYAP_FLOW_FONT_REQUEST', requestId, name }, '*');
+    });
   }
 
   function argbToRgb01(colorValue) {
@@ -274,8 +282,8 @@
   async function loadFontBytes() {
     if (fontBytesCache) return fontBytesCache;
     const [regular, bold, italic, boldItalic] = await Promise.all([
-      fetchFontBytes('regular'), fetchFontBytes('bold'),
-      fetchFontBytes('italic'), fetchFontBytes('boldItalic'),
+      requestFontBytes('regular'), requestFontBytes('bold'),
+      requestFontBytes('italic'), requestFontBytes('boldItalic'),
     ]);
     fontBytesCache = { regular, bold, italic, boldItalic };
     return fontBytesCache;

@@ -22,6 +22,12 @@
       "all_frames": false
     },
     {
+      "matches": ["https://avukat.uyap.gov.tr/*", "https://vatandas.uyap.gov.tr/*"],
+      "js": ["lib/udf-font-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
       "matches": [
         "https://gonderitakip.ptt.gov.tr/*",
         "https://*.ptt.gov.tr/*"

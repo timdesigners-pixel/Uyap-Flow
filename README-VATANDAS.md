@@ -63,14 +63,28 @@ UDF-Toolkit'teki Python `udf_reader.py` modülünün JSZip tabanlı JavaScript p
 ### `extension/lib/udf-to-pdf.js` (yeni dosya) — UDF → PDF dönüşümü
 Python `udf_to_pdf.py`'nin basitleştirilmiş bir JS portu: `pdf-lib` + `fontkit` ile UDF içeriğini
 (paragraf, kalın/italik, hizalama, tablo, gömülü JPEG/PNG resim, sayfa sonu) gerçek bir PDF'e
-render eder. Türkçe karakterler için `DejaVuSerif` fontu (4 ağırlık) `lib/fonts/` altında
-vendor edildi ve `web_accessible_resources` ile `chrome.runtime.getURL()` üzerinden tembel
-(lazy) yüklenir — sadece PDF dönüşümü ilk kullanıldığında indirilir, sayfa açılışını etkilemez.
+render eder. Türkçe karakterler için `DejaVuSerif` fontu (4 ağırlık) `lib/fonts/` altında vendor edildi.
 
-**Node'da (jsdom + gerçek pdf-lib/fontkit) doğrulandı**: kalın/italik/Türkçe karakterler
-(ığüşöç ĞÜŞÖÇİı dahil), 2 sütunlu tablo ve gömülü PNG resim doğru render edildi (görsel olarak
-piksel bazında incelendi — ekran görüntüsü PR'da mevcut). **Canlı Vatandaş Portal'da henüz test
-edilmedi** — kullanıcının bir sonraki testi bekleniyor.
+**Önemli düzeltme (2. iterasyon):** İlk sürüm font dosyalarını doğrudan `chrome.runtime.getURL()`
+ile okumaya çalışıyordu — ama bu API **MAIN world'de tanımlı değildir** (Chrome'un kasıtlı bir
+kısıtlaması; araştırmayla doğrulandı, bkz. kaynaklar). `main.js`/`udf-to-pdf.js` sayfanın kendi
+`fetch`/`XMLHttpRequest`/`downloadDocURL` fonksiyonlarını yamalamak için MAIN world'de çalışmak
+zorunda. Çözüm: yeni bir `extension/lib/udf-font-bridge.js` (varsayılan ISOLATED world, `chrome.runtime`'a
+erişebilir) `window.postMessage` köprüsüyle font baytlarını MAIN world'e aktarıyor —
+Chrome'un MAIN/ISOLATED world ayrımı için resmi olarak önerilen köprü deseni budur.
+
+**Test durumu:**
+- ✅ Node'da (jsdom + gerçek `pdf-lib`/`fontkit`) render motorunun kendisi doğrulandı: kalın/italik/
+  Türkçe karakterler (ığüşöç ĞÜŞÖÇİı dahil), 2 sütunlu tablo, gömülü PNG resim — piksel bazında
+  gözle incelendi.
+- ✅ `postMessage` köprü protokolü de Node'da (aynı `window` içinde iki taraf simüle edilerek)
+  uçtan uca doğrulandı: istek → köprü font baytını okur → yanıt → font gömülür → PDF üretilir.
+  **Tek istisna:** jsdom'un `postMessage` implementasyonu `event.source`'u `null` bırakıyor
+  (bilinen, dökümante bir jsdom eksikliği — gerçek Chrome'da `event.source === window` olur);
+  bu yüzden güvenlik kontrolü test kopyalarında gevşetilerek protokolün geri kalanı doğrulandı.
+- ⛔ **Gerçek Chrome'da MAIN↔ISOLATED postMessage köprüsü henüz canlı test edilmedi.** Bu, standart
+  ve yaygın kullanılan bir Chrome extension deseni olsa da, kesin doğrulama için kullanıcının
+  eklentiyi yenileyip tekrar denemesi gerekiyor.
 
 **v1 basitleştirmeleri (bilinçli sınırlamalar):**
 - Üstbilgi/altbilgi her sayfada tekrar etmez, sadece ilk/son sayfada bir kez basılır.
