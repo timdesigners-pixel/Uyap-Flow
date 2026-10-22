@@ -1,0 +1,42 @@
+name: UYAP Flow release
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check extension/main.js
+      - run: node tools/test-package.cjs
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Package extension
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          root = Path('extension')
+          with ZipFile('Uyap-Flow-Chrome.zip', 'w', ZIP_DEFLATED) as archive:
+              for file in root.rglob('*'):
+                  if file.is_file(): archive.write(file, file.relative_to(root))
+          PY
+      - name: Publish extension ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" Uyap-Flow-Chrome.zip --repo "$GITHUB_REPOSITORY" --title "UYAP Flow $RELEASE_TAG" --notes-file RELEASE-NOTES.md
