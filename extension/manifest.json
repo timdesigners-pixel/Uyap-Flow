@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Uyap Flow — Toplu Evrak İndirici",
   "short_name": "Uyap Flow",
-  "version": "2.3.7",
+  "version": "2.3.8",
   "description": "Uyap Flow: UYAP Avukat Portal için toplu evrak indirici. UDF/PDF, ZIP arşivi, PDF birleştirme, Excel listesi, filtreler, çoklu dosya kuyruğu, seçim modu, PTT tebligat sorgulama ve daha fazlası.",
   "host_permissions": [
     "https://avukat.uyap.gov.tr/*",
@@ -14,8 +14,14 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://avukat.uyap.gov.tr/*"],
-      "js": ["lib/jszip.min.js", "lib/pdf-lib.min.js", "main.js"],
+      "matches": [
+        "https://avukat.uyap.gov.tr/*"
+      ],
+      "js": [
+        "lib/jszip.min.js",
+        "lib/pdf-lib.min.js",
+        "main.js"
+      ],
       "run_at": "document_idle",
       "world": "MAIN",
       "all_frames": false
@@ -25,7 +31,9 @@
         "https://gonderitakip.ptt.gov.tr/*",
         "https://*.ptt.gov.tr/*"
       ],
-      "js": ["ptt-helper.js"],
+      "js": [
+        "ptt-helper.js"
+      ],
       "run_at": "document_idle",
       "world": "MAIN",
       "all_frames": false

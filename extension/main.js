@@ -979,7 +979,7 @@
             'Açıksa indirme yolu UYAP\'taki klasör yapısını taklit eder (örn. Tebligatlar / Genel Müzekkere). ',
             'Ağaçtan okunamazsa eski tür-tablosu (01_Durusma_Zaptları vb.) kullanılır. «Otomatik alt klasör» ile birlikte önce dosya klasörü, sonra bu alt yol oluşur.')),
         makeOpt('Tek ZIP arşivi olarak indir', UI.useZip,
-          el('div', { class: 'uyap-bulk-hint' }, 'Tüm evraklar tek bir .zip dosyasında paketlenir. Büyük arşivler için RAM kullanımı artar.')),
+          el('div', { class: 'uyap-bulk-hint' }, 'Tüm evraklar, Mind Palace içe aktarma manifestiyle tek ZIP dosyasında paketlenir. Büyük arşivler için RAM kullanımı artar.')),
         makeOpt('Tek birleşik PDF olarak indir', UI.useMergePdf,
           el('div', { class: 'uyap-bulk-hint' },
             '🛈 Sadece <b>PDF modu</b>nda çalışır. ',
@@ -1825,9 +1825,28 @@
     }
     log(`ZIP arşivi oluşturuluyor: ${items.length} dosya…`, 'info');
     const zip = new JSZip();
+    const info = getOpenDosyaInfo();
+    const manifest = {
+      format: 'uyap-flow/mind-palace', version: 1, created: new Date().toISOString(),
+      case: { number: info.yil && info.no ? `${info.yil}/${info.no}` : info.esas,
+        court: info.mahkeme, kind: /icra/.test((info.dosyaTuru + ' ' + info.mahkeme).toLocaleLowerCase('tr')) ? 'icra' : 'dava' },
+      documents: [],
+    };
+    const usedNames = new Set();
     for (const item of items) {
-      zip.file(item.filename, item.blob);
+      let filename = item.filename;
+      let suffix = 1;
+      while (usedNames.has(filename)) {
+        const dot = item.filename.lastIndexOf('.');
+        filename = item.filename.slice(0, dot) + '_' + suffix++ + item.filename.slice(dot);
+      }
+      usedNames.add(filename);
+      const bytes = await item.blob.arrayBuffer();
+      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+      zip.file(filename, bytes);
+      manifest.documents.push({ path: filename, title: filename.split('/').pop(), size: bytes.byteLength, sha256: hash });
     }
+    zip.file('mind-palace-manifest.json', JSON.stringify(manifest, null, 2));
     setProgress(95, 'ZIP yazılıyor…');
     const content = await zip.generateAsync({ type: 'blob' }, (m) => {
       setProgress(95 + m.percent * 0.05, `ZIP: ${m.percent.toFixed(0)}%`);
